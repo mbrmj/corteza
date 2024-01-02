@@ -1,0 +1,25 @@
+stages:
+  - test
+  - build
+  - release
+
+variables:
+  BUILD_OS: linux
+  BUILD_ARCH: amd64
+  GO_VERSION: 1.19
+  GOFLAGS: -mod=readonly
+  NODE_VERSION: 16
+  RELEASE_BASE_URL: "https://releases.cortezaproject.org/files"
+  SASS_VERSION: 1.69.5
+
+
+server-test:
+  stage: test
+  image: ubuntu:20.04
+  script:
+    - apt-get update && apt-get install -y make
+    - make -C server/pkg/locale src/en
+    - make -C server test.unit
+    - make -C server test.store
+    - make -C server test.integration
+  

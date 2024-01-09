@@ -6,8 +6,9 @@ ARG VERSION=2022.9.0
 ARG SASS_VERSION=1.69.5
 ARG SERVER_VERSION=${VERSION}
 ARG WEBAPP_VERSION=${VERSION}
-ARG CORTEZA_SERVER_PATH=https://releases.cortezaproject.org/files/corteza-server-${SERVER_VERSION}-linux-amd64.tar.gz
-ARG CORTEZA_WEBAPP_PATH=https://releases.cortezaproject.org/files/corteza-webapp-${WEBAPP_VERSION}.tar.gz
+
+ARG CORTEZA_SERVER_PATH=server/release
+ARG CORTEZA_WEBAPP_PATH=client/web/dist/
 ARG SASS_URL=https://github.com/sass/dart-sass/releases/download/${SASS_VERSION}/dart-sass-${SASS_VERSION}-linux-x64.tar.gz
 
 RUN mkdir /tmp/server
@@ -19,19 +20,22 @@ ADD $CORTEZA_WEBAPP_PATH /tmp/webapp
 RUN apk update && apk add --no-cache file
 RUN apk add curl
 
-RUN file "/tmp/server/$(basename $CORTEZA_SERVER_PATH)" | grep -q 'gzip' && \
-    tar zxvf "/tmp/server/$(basename $CORTEZA_SERVER_PATH)" -C / || \
-    cp -a "/tmp/server" /
-
-RUN mv /corteza-server /corteza
+RUN mv /tmp/server/pkg/corteza-server /corteza
 
 WORKDIR /corteza
 
+
 RUN rm -rf /corteza/webapp
 
-RUN file "/tmp/webapp/$(basename $CORTEZA_WEBAPP_PATH)" | grep -q 'gzip' && \
-    mkdir /corteza/webapp && tar zxvf "/tmp/webapp/$(basename $CORTEZA_WEBAPP_PATH)" -C /corteza/webapp || \
-    cp -a "/tmp/webapp" /corteza/webapp
+RUN ls -alh 
+RUN rm -rf /corteza/webapp
+
+RUN cp -r  /tmp/webapp/one /corteza/webapp
+RUN cp -r /tmp/webapp/. /corteza/webapp/
+
+RUN cp /tmp/webapp/one /corteza/webapp
+RUN cp /tmp/webapp/ /corteza/webapp/
+RUN rm -rf /corteza/webapp/one
 
 WORKDIR /tmp
 

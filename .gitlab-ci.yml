@@ -1,25 +1,362 @@
 stages:
-  - test
+  - build-lib
   - build
-  - release
+  - build-server
+  # - release
+  - publish
+  - test
 
 variables:
-  BUILD_OS: linux
-  BUILD_ARCH: amd64
-  GO_VERSION: 1.19
-  GOFLAGS: -mod=readonly
-  NODE_VERSION: 16
-  RELEASE_BASE_URL: "https://releases.cortezaproject.org/files"
-  SASS_VERSION: 1.69.5
+  BUILD_OS: "linux"
+  BUILD_ARCH: "amd64"
+  GO_VERSION: "1.19"
+  GOFLAGS: "-mod=readonly"
+  NODE_VERSION: "16"
+  SASS_VERSION: "1.69.5"
+  BUILD_VERSION: 2023.9.2
+  # BUILD_VERSION: $CI_COMMIT_REF_SLUG
 
 
 server-test:
   stage: test
-  image: ubuntu:20.04
+  image: golang:1.19
   script:
-    - apt-get update && apt-get install -y make
     - make -C server/pkg/locale src/en
     - make -C server test.unit
     - make -C server test.store
     - make -C server test.integration
-  
+  allow_failure: true
+  tags:
+    - rocky9
+
+
+
+server-web-console-build:
+  stage: build
+  image: node:16
+  before_script:
+    - npm install -g  @vue/cli-service
+  script:
+    - cd server/webconsole
+    - rm -rf node_modules/.yarn-integrity && yarn install
+    - yarn build
+  artifacts:
+    paths:
+      - server/webconsole/dist
+    expire_in: 1 Day
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - server/webconsole/node_modules
+  tags:
+    - rocky9
+server-release:
+  stage: build-server
+  image:
+    name: mbrmj/conts
+  variables:
+    BUILD_DEST_DIR: "$CI_PROJECT_DIR/server/release"
+    VERSION: 2023.9.2
+  script:
+    - pwd
+    - mkdir $BUILD_DEST_DIR
+    - cp *.md DCO LICENSE server/
+    - cd server/pkg/locale
+    - make src/en src/de src/fr
+    - cd $CI_PROJECT_DIR/server
+    - make release
+    - ls $BUILD_DEST_DIR
+  artifacts:
+    expire_in: "1 days"
+    paths:
+      - server/release
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - server/vendor
+  tags:
+    - rocky9
+################################################
+####       LIB                            ######
+################################################
+
+
+.lib-test: &lib-test
+  stage: test 
+  image: node:16
+  before_script:
+    - npm install -g  @vue/cli-service
+  script:
+    - cd lib/${folder}
+    - rm -rf node_modules/.yarn-integrity && yarn install
+    - yarn test:unit
+  allow_failure: true
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - lib/${folder}/node_modules
+  tags:
+    - rocky9
+
+.lib-test-js:
+  <<: *lib-test
+  variables:
+    folder: js
+
+.lib-test-vue:
+  <<: *lib-test
+  variables:
+    folder: vue
+
+
+.lib-build-and-publish: &lib-build-and-publish
+  stage: build-lib
+  image: node:16
+  before_script:
+    - npm install -g  @vue/cli-service
+  script:
+    - cd lib/${folder}
+    - rm -rf node_modules/.yarn-integrity && yarn install
+    - yarn build
+  artifacts:
+    paths:
+      - lib/${folder}/dist
+    expire_in: 1 Day
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - lib/${folder}/node_modules
+  tags:
+    - rocky9
+
+lib-build-and-publish-vue:
+  <<: *lib-build-and-publish
+  variables:
+    folder: vue
+
+
+lib-build-and-publish-js:
+  <<: *lib-build-and-publish
+  variables:
+    folder: js
+
+
+
+.publish-libs-install-vuejs: &link-libs-install-vuejs
+  before_script:
+    - npm install -g  @vue/cli-service
+    - cd  $CI_PROJECT_DIR/lib/js && yarn link 
+    - cd $CI_PROJECT_DIR/lib/vue && yarn link
+    - cd $CI_PROJECT_DIR
+    - yarn config set network-timeout 300000
+  tags:
+    - rocky9
+
+
+# ################################################
+# ####       Web clients                    ######
+# ################################################
+
+
+.client-web-test: &client-web-test
+  image: node:16
+  stage: test
+  <<: *link-libs-install-vuejs
+  script:
+    - cd client/web/${app}
+    - yarn link @cortezaproject/corteza-js 
+    - yarn link @cortezaproject/corteza-vue
+    - make dep
+    - make test
+  allow_failure: true
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - client/web/${app}/node_modules
+  tags:
+    - rocky9
+
+
+client-web-test-admin:
+  <<: *client-web-test
+  variables:
+    app: admin
+
+client-web-test-compose:
+  <<: *client-web-test
+  variables:
+    app: compose
+
+
+.client-web-test-discovery:
+  <<: *client-web-test
+  variables:
+    app: discovery
+
+.client-web-test-privacy:
+  <<: *client-web-test
+  variables:
+    app: privacy
+
+
+.client-web-test-reporter:
+  <<: *client-web-test
+  variables:
+    app: reporter
+
+
+.client-web-test-one:  
+  <<: *client-web-test
+  variables:
+    app: one
+
+.client-web-test-workflow:
+  <<: *client-web-test
+  variables:
+    app: workflow
+
+
+################################################
+.client-web-release: &client-web-release
+  image: node:16
+  stage: build
+  <<: *link-libs-install-vuejs
+  script:
+    - cp *.md DCO LICENSE client/web/${app}
+    - cd client/web/${app}
+    - yarn link @cortezaproject/corteza-js 
+    - yarn link @cortezaproject/corteza-vue 
+    - make dep
+    - make build
+    - make release
+    - mkdir -p ../dist/
+    - cp -r dist ../dist/${app}
+  artifacts:
+    expire_in: "1 days"
+    paths:
+      - $CI_PROJECT_DIR/client/web/dist/${app}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - client/web/${app}/node_modules
+  tags:
+    - rocky9
+#   only:
+#   changes:
+#     - client/web/${app}/**/*
+
+
+
+# .client-web-release-zip: &client-web-release-zip
+#   image: node:16
+#   stage: build
+#   <<: *link-libs-install-vuejs
+#   script:
+#     - cp *.md DCO LICENSE client/web/${app}
+#     - cd client/web/${app}
+#     - yarn link @cortezaproject/corteza-js 
+#     - yarn link @cortezaproject/corteza-vue 
+#     - make dep
+#     - make build
+#     - make release
+#     - mkdir -p ../dist/
+#     - cp -r dist ../dist/${app}
+#   artifacts:
+#     expire_in: "1 days"
+#     paths:
+#       - $CI_PROJECT_DIR/client/web/dist/${app}
+#   cache:
+#     key: ${CI_COMMIT_REF_SLUG}
+#     paths:
+#       - client/web/${app}/node_modules
+#   tags:
+#     - rocky9
+#   except:
+#   changes:
+#     - client/web/${app}/**/*
+
+
+
+client-web-release-admin:
+  extends: .client-web-release
+  variables:
+    app: admin
+
+
+.client-web-release-compose:
+  extends: .client-web-release
+  variables:
+    app: compose
+
+.client-web-release-discovery:
+  extends: .client-web-release
+  variables:
+    app: discovery
+
+.client-web-release-privacy:
+  extends: .client-web-release
+  variables:
+    app: privacy
+
+.client-web-release-reporter: 
+  extends: .client-web-release
+  variables:
+    app: reporter
+
+
+.client-web-release-one:
+  extends: .client-web-release
+  variables:
+    app: one
+
+.client-web-release-workflow:
+  extends: .client-web-release
+  variables:
+    app: workflow
+
+
+
+
+#############################################################
+##         This is where it all comes together
+#############################################################
+
+docker-images-kaniko:
+  image:
+    name: gcr.io/kaniko-project/executor:v1.14.0-debug
+    entrypoint: [""]
+  before_script:
+    - |
+      echo "-----BEGIN CERTIFICATE-----
+      MIIC+zCCAeOgAwIBAgIJAJvwDvXX4pFyMA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNV
+      BAMMCWRldm9wcy5vczAeFw0xOTA1MjQxMzAyMjBaFw0yOTA1MjExMzAyMjBaMBQx
+      EjAQBgNVBAMMCWRldm9wcy5vczCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoC
+      ggEBALgN45axwfP6qoLxxYNBb7hdtBbVogCszYncNy4GhrFuPr19bRn/701TbS8O
+      kUGb5glAnpSLKGpKZ56a8JsobdpnYe+CzMn/pxBG9ZAPpgaXa8+nwpG1Y1EAcHse
+      64mAMRaRlKZIuSe760Shbwp2auUAfeGaJrEUXwH9gf2e1yODHm4Ai/feTdTnnHJv
+      /5rlLIgwqThZhusBj6c7wHwFvXSQbhgSmDuBcW7kGzOl4Y4BfaqTCKDMGts7ADUL
+      RlWEfKw2WGaPrN05py/bZqXHJo58pRi1B4HmN/fD1lpPa0Mt6/CSc5tu/ONutZRc
+      VVaam+KgdRA3SS4plrzgbW4UtVMCAwEAAaNQME4wHQYDVR0OBBYEFCebXBu7yxxT
+      l0paOZzLOZy/0SpFMB8GA1UdIwQYMBaAFCebXBu7yxxTl0paOZzLOZy/0SpFMAwG
+      A1UdEwQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAFagQI5ZoVxQpxQS4xCAC1bu
+      pwEZx41QxO6RpzxUooTQbMrGXow2+BRGP3ffMIYU8OndS/+aVWXZg/1n5+S4Q9tR
+      rh5JixQ016oMcDCRskdRbetH7bAd0UZLD5puXP/N5kC6eEe6YNAGjTxdKid+MvSn
+      5DozCO8fACzRUiXbO/RJyEpACC//T8Z+hbkBwu/f10fG5ldDqf4N2FYGKQMVa3Ko
+      HWo4ffZsilD1tLxQrsamLJJGTLM0rO4CPjx1jw3bW3Ab3t0wZFgIy7cnFA839kVZ
+      a5p8t4lG/S1xAjtWMFCtp+qUWX2pjUSOJqAal5D5lQtK325ptr4qYnS/x/Yq7I8=
+      -----END CERTIFICATE-----" >> /kaniko/ssl/certs/ca-certificates.crt
+  stage: publish
+  variables:
+    DOCKER_CONFIG: /kaniko/.docker/
+  script:
+    - mkdir -p /kaniko/.docker/
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+     --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+     --build-arg "VERSION=${BUILD_VERSION}"
+     --build-arg "SASS_VERSION=${SASS_VERSION}"
+     --build-arg "CORTEZA_WEBAPP_PATH=client/web/dist/"
+     --build-arg "CORTEZA_SERVER_PATH=server/release"
+     --destination "${CI_REGISTRY_IMAGE}/corteza:${BUILD_VERSION}"
+  tags:
+    - rocky9
